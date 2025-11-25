@@ -1,71 +1,33 @@
-# bot.py — Tripora AI (fixed buttons + robust keyword handling + affiliate links)
+# bot.py — Tripora AI (упрощённый, с вашими виджетами)
 import os
 import time
-import re
 import telebot
 from urllib.parse import quote
 
-# ========== ПАРАМЕТРЫ ПАРТНЁРКИ
+# ----------------- ПАРАМЕТРЫ (вставлены ваши widget URL из сообщений) -----------------
+WIDGET_AVIA = "https://tpwgt.com/content?currency=rub&trs=475152&shmarker=685852&show_hotels=true&powered_by=true&locale=ru&searchUrl=www.aviasales.ru%2Fsearch&primary_override=%2332a8dd&color_button=%2332a8dd&color_icons=%2332a8dd&dark=%23262626&light=%23FFFFFF&secondary=%23FFFFFF&special=%23C4C4C4&color_focused=%2332a8dd&border_radius=0&plain=false&promo_id=7879&campaign_id=100"
+WIDGET_SIMPLE = "https://tpwgt.com/content?trs=475152&shmarker=685852&locale=ru&powered_by=true&border_radius=0&plain=true&color_background=%23ffffff&color_border=%230f5de4&color_button=%2332a8dd&color_icons=%2332a8dd&promo_id=7257&campaign_id=459"
+WIDGET_YELLOW = "https://tpwgt.com/content?trs=475152&shmarker=685852&locale=ru&powered_by=true&border_radius=5&plain=true&show_logo=true&color_background=%23ffca28&color_button=%2355a539&color_text=%23000000&color_input_text=%23000000&color_button_text=%23ffffff&promo_id=4480&campaign_id=10"
+
+# tp.media redirect (если нужно — можно заменить маркер/params)
+TP_REDIRECT = "https://tp.media/r"
 MARKER = "685852"
 TRS = "475152"
-TP_REDIRECT = "https://tp.media/r"
 
-AVIASALES_SEARCH_BASE = "https://www.aviasales.com/search"
-AVIASALES_KZ_BASE = "https://www.aviasales.kz/search"
+# Aviasales base (используем для прямого поиска в случае необходимости)
+AVIASALES_BASE = "https://www.aviasales.com/search"
 
-# Telegram token (Render env var)
+# ----------------- TELEGRAM TOKEN -----------------
 TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN not set in environment variables")
 
 bot = telebot.TeleBot(TOKEN)
 
-# ---- простое хранение состояния (память в процессе)
-user_states = {}  # {chat_id: {"step": "...", "data": {...}}}
+# ---- простое состояние (для диалога)
+user_states = {}  # chat_id -> {"step": ..., "data": {...}}
 
-# ---- вспомогательные функции
-def affiliate_search_link(base_search_url):
-    encoded = quote(base_search_url, safe='')
-    return f"{TP_REDIRECT}?marker={MARKER}&trs={TRS}&u={encoded}"
-
-# Нормализует вход (убирает эмодзи, лишние символы, приводит к lowercase)
-def normalize_text(s):
-    if not s:
-        return ""
-    # заменяем специальные кавычки/тире на обычные пробелы
-    s = s.replace('\u2013', ' ').replace('\u2014',' ').replace('\u2019',' ')
-    # удаляем URL-процент-коды, оставим буквы/цифры/пробелы (кириллица и латиница)
-    # оставляем также знаки / и - (на случай IATA или форматов)
-    s = re.sub(r'[^\w\s\-\/]', ' ', s, flags=re.UNICODE)
-    # убрать подчёркивания и лишние пробелы
-    s = s.replace('_',' ')
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s.lower()
-
-# Определение ключевых команд по вхождению слова
-COMMAND_KEYWORDS = {
-    "avia": ["avia","авиа","✈","самолет","билет","flight","flights"],
-    "hotels": ["hotel","отел","🏨","отели","hotels"],
-    "rail": ["жд","ржд","поезд","rail","train","🚄"],
-    "buses": ["автобус","bus","🚌","автобусы"],
-    "cars": ["аренд","машин","car","rent","🚗","аренда"],
-    "transfer": ["трансфер","taxi","такси","🚕","transfer"],
-    "tickets": ["мои билеты","ticket","tickets","билеты","🧾"],
-    "tours": ["тур","туры","акц","tours","🧭"],
-    "cruise": ["круз","круиз","cruise","🚢"],
-    "support": ["поддержк","support","help","❓"]
-}
-
-def detect_command_from_text(txt):
-    n = normalize_text(txt)
-    # exact words and substrings
-    for cmd, keywords in COMMAND_KEYWORDS.items():
-        for kw in keywords:
-            if kw in n:
-                return cmd
-    return None
-
-# ---- клавиатура главное меню
+# ---- клавиатура главное меню (простая, удобная)
 def main_menu_keyboard():
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     kb.row("✈️ Авиабилеты", "🚄 ЖД билеты", "🚌 Автобусы")
@@ -74,130 +36,154 @@ def main_menu_keyboard():
     kb.row("❓ Поддержка")
     return kb
 
-# ---- старт и меню
+# ---- помощник: создать tp.media редирект (для прямой ссылки)
+def make_tp_redirect(target_url):
+    encoded = quote(target_url, safe='')
+    return f"{TP_REDIRECT}?marker={MARKER}&trs={TRS}&u={encoded}"
+
+# ---- нормализация текста для простого определения команды
+def norm(text):
+    if not text:
+        return ""
+    return text.lower().strip()
+
+# ---- старт
 @bot.message_handler(commands=['start'])
 def cmd_start(m):
-    txt = ("Привет! Я *Tripora AI* — ваш персональный помощник по билетам, отелям и турам.\n\n"
-           "Нажмите одну из кнопок ниже или напишите что нужно (например: «авиа», «отели», «аренда»).")
-    bot.send_message(m.chat.id, txt, parse_mode="Markdown", reply_markup=main_menu_keyboard())
+    text = ("Привет! Я Tripora AI — ваш помощник по поиску билетов, отелей и туров.\n\n"
+            "Нажмите кнопку внизу или напишите, что надо (например: 'авиабилеты').")
+    bot.send_message(m.chat.id, text, reply_markup=main_menu_keyboard())
 
-@bot.message_handler(commands=['menu','help'])
+@bot.message_handler(commands=['menu', 'help'])
 def cmd_menu(m):
-    bot.send_message(m.chat.id, "Главное меню — выберите раздел или напишите запрос:", reply_markup=main_menu_keyboard())
+    bot.send_message(m.chat.id, "Главное меню:", reply_markup=main_menu_keyboard())
 
-# ---- AVIA: диалогный поиск (быстрая версия)
-@bot.message_handler(commands=['avia'])
-def cmd_avia_start(m):
-    bot.send_message(m.chat.id, "Начнём поиск авиабилетов. Введите город отправления (IATA или название):")
+# ---- начало авиа поиска
+def start_avia_flow(m):
     user_states[m.chat.id] = {"step":"avia_origin","data":{}}
+    bot.send_message(m.chat.id, "Начнём поиск авиабилетов. Введите город отправления (IATA или название):")
 
-# ---- HOTELS simple start
-@bot.message_handler(commands=['hotels'])
-def cmd_hotels_start(m):
-    bot.send_message(m.chat.id, "Поиск отелей. Введите город (например: Almaty или Алматы):")
+# ---- начало отелей
+def start_hotels_flow(m):
     user_states[m.chat.id] = {"step":"hotels_city","data":{}}
+    bot.send_message(m.chat.id, "Поиск отелей. Введите город (например: Almaty или Алматы):")
 
-# ---- Обработка любых сообщений — в том числе кнопок
+# ---- общий handler для кнопок/текста
 @bot.message_handler(func=lambda msg: True)
-def all_messages(m):
+def handler_all(m):
     cid = m.chat.id
     text = (m.text or "").strip()
-    if not text:
-        bot.send_message(cid, "Пока я могу работать только с текстом. Нажмите /menu.", reply_markup=main_menu_keyboard())
-        return
+    t = norm(text)
 
-    # Сначала — попытка распознать команду по ключевым словам (работает с эмодзи/вариациями)
-    detected = detect_command_from_text(text)
-    if detected == "avia":
-        cmd_avia_start(m); return
-    if detected == "hotels":
-        cmd_hotels_start(m); return
-    if detected == "rail":
-        bot.send_message(cid, "Запуск поиска ЖД билетов — пока что перенаправлю на общий поиск.", reply_markup=main_menu_keyboard()); return
-    if detected == "buses":
-        bot.send_message(cid, "Ищем автобусы — перенаправляю к поиску.", reply_markup=main_menu_keyboard()); return
-    if detected == "cars":
-        # простой ответ с виджетом / ссылкой аренды (можно подставить виджет)
-        bot.send_message(cid, "Перейдите по ссылке для аренды авто:", reply_markup=main_menu_keyboard())
+    # быстрые ключевые сопоставления (ключевые слова)
+    if "ави" in t:
+        start_avia_flow(m); return
+    if "отел" in t or "hotel" in t:
+        start_hotels_flow(m); return
+    if "аренд" in t or "машин" in t or "авто" in t:
+        # прямой переход: покажем виджет/ссылку на аренду (используем WIDGET_SIMPLE)
+        kb = telebot.types.InlineKeyboardMarkup()
+        kb.add(telebot.types.InlineKeyboardButton("Открыть виджет аренды (веб)", url=WIDGET_SIMPLE))
+        bot.send_message(cid, "Перейдите по ссылке для аренды авто:", reply_markup=kb)
         return
-    if detected == "transfer":
-        bot.send_message(cid, "Трансферы — предлагаю открыть виджет такси/трансфера:", reply_markup=main_menu_keyboard())
+    if "трансф" in t:
+        kb = telebot.types.InlineKeyboardMarkup()
+        kb.add(telebot.types.InlineKeyboardButton("Открыть трансферы (виджет)", url=WIDGET_YELLOW))
+        bot.send_message(cid, "Перейдите по ссылке для трансферов:", reply_markup=kb)
         return
-    if detected == "tours":
-        bot.send_message(cid, "Туры и акции — вот раздел с предложениями:", reply_markup=main_menu_keyboard())
+    if "круиз" in t or "круизы" in t:
+        kb = telebot.types.InlineKeyboardMarkup()
+        kb.add(telebot.types.InlineKeyboardButton("Открыть раздел круизов (виджет)", url=WIDGET_SIMPLE))
+        bot.send_message(cid, "Круизы — открою раздел:", reply_markup=kb)
         return
-    if detected == "cruise":
-        bot.send_message(cid, "Круизы — открою раздел:", reply_markup=main_menu_keyboard())
+    if "жд" in t or "поезд" in t:
+        kb = telebot.types.InlineKeyboardMarkup()
+        kb.add(telebot.types.InlineKeyboardButton("Открыть ЖД (виджет)", url=WIDGET_SIMPLE))
+        bot.send_message(cid, "ЖД билеты — открываю виджет:", reply_markup=kb)
         return
-    if detected == "support":
-        bot.send_message(cid, "Поддержка: опишите проблему, и наш менеджер свяжется с вами.", reply_markup=main_menu_keyboard())
+    if "автобус" in t or "автобус" in t:
+        kb = telebot.types.InlineKeyboardMarkup()
+        kb.add(telebot.types.InlineKeyboardButton("Открыть автобусы (виджет)", url=WIDGET_SIMPLE))
+        bot.send_message(cid, "Автобусы — открываю виджет:", reply_markup=kb)
         return
+    if "поддерж" in t or "support" in t:
+        bot.send_message(cid, "Поддержка: опишите проблему, и мы свяжемся с вами.")
+        return
+    if "меню" in t:
+        cmd_menu(m); return
 
-    # если не распознано по слову — проверяем состояние диалога
+    # если есть активное состояние — продолжаем диалог
     state = user_states.get(cid)
-    if state:
-        step = state.get("step")
-        # avia flow
-        if step == "avia_origin":
-            state["data"]["origin"] = text
-            state["step"] = "avia_destination"
-            bot.send_message(cid, "Куда летим? Введите город назначения (IATA или название):")
-            return
-        if step == "avia_destination":
-            state["data"]["destination"] = text
-            state["step"] = "avia_depart_date"
-            bot.send_message(cid, "Дата вылета (YYYY-MM-DD) или 'any' для любого дня:")
-            return
-        if step == "avia_depart_date":
-            state["data"]["depart_date"] = text
-            state["step"] = "avia_return_date"
-            bot.send_message(cid, "Дата возвращения (YYYY-MM-DD) или 'one' / 'без' для без возврата:")
-            return
-        if step == "avia_return_date":
-            state["data"]["return_date"] = text
-            state["step"] = "avia_passengers"
-            bot.send_message(cid, "Сколько пассажиров? Введите число (например: 1):")
-            return
-        if step == "avia_passengers":
-            try:
-                p = int(re.sub(r'\D','', text) or "1")
-            except:
-                bot.send_message(cid, "Нужно число. Попробуйте ещё раз:")
-                return
-            state["data"]["passengers"] = p
-            od = state["data"]
-            params = []
-            if od.get("origin"):
-                params.append(f"origin={quote(od['origin'])}")
-            if od.get("destination"):
-                params.append(f"destination={quote(od['destination'])}")
-            if od.get("depart_date") and od['depart_date'].lower() not in ("any","любой"):
-                params.append(f"depart_date={quote(od['depart_date'])}")
-            if od.get("return_date") and od['return_date'].lower() not in ("one","без","away","none"):
-                params.append(f"return_date={quote(od['return_date'])}")
-            base = AVIASALES_SEARCH_BASE + ("?" + "&".join(params) if params else "")
-            affiliate = affiliate_search_link(base)
-            kb = telebot.types.InlineKeyboardMarkup()
-            kb.add(telebot.types.InlineKeyboardButton("Открыть лучшие рейсы", url=affiliate))
-            bot.send_message(cid, "Готово — открывайте поиск по ссылке:", reply_markup=kb)
-            user_states.pop(cid, None)
-            return
+    if not state:
+        # нет состояния и не распознали команду
+        bot.send_message(cid, "Нажмите /menu или выберите кнопку в меню.", reply_markup=main_menu_keyboard())
+        return
 
-        # hotels flow
-        if step == "hotels_city":
-            city = text
-            search_url = f"https://www.aviasales.com/hotels?search={quote(city)}"
-            affiliate = affiliate_search_link(search_url)
-            kb = telebot.types.InlineKeyboardMarkup()
-            kb.add(telebot.types.InlineKeyboardButton("Поиск отелей", url=affiliate))
-            bot.send_message(cid, f"Вот ссылка на поиск отелей в {city}:", reply_markup=kb)
-            user_states.pop(cid, None)
+    step = state.get("step")
+    # авия flow
+    if step == "avia_origin":
+        state["data"]["origin"] = text
+        state["step"] = "avia_destination"
+        bot.send_message(cid, "Куда летим? Введите город назначения (IATA или название):")
+        return
+    if step == "avia_destination":
+        state["data"]["destination"] = text
+        state["step"] = "avia_depart_date"
+        bot.send_message(cid, "Дата вылета (YYYY-MM-DD) или 'any' для любого дня:")
+        return
+    if step == "avia_depart_date":
+        state["data"]["depart_date"] = text
+        state["step"] = "avia_passengers"
+        bot.send_message(cid, "Сколько пассажиров? Введите число (например: 1):")
+        return
+    if step == "avia_passengers":
+        # validate passengers
+        try:
+            p = int(text)
+        except:
+            bot.send_message(cid, "Нужно число. Попробуйте ещё раз:")
             return
+        state["data"]["passengers"] = p
 
-    # если не в состоянии и не распознано — предложить меню и подсказку
-    bot.send_message(cid, "Не понял. Нажмите /menu или выберите кнопку (можно просто написать: 'авиа', 'отели', 'аренда').", reply_markup=main_menu_keyboard())
+        od = state["data"]
+        # строим простой aviasales поисковый URL (минимально, чтобы работал)
+        params = []
+        if od.get("origin"):
+            params.append(f"origin={quote(od['origin'])}")
+        if od.get("destination"):
+            params.append(f"destination={quote(od['destination'])}")
+        if od.get("depart_date") and od['depart_date'].lower() not in ("any","любой"):
+            params.append(f"depart_date={quote(od['depart_date'])}")
+        # return_date не используем в упрощённой версии (можно добавить)
+        base = AVIASALES_BASE + ("?" + "&".join(params) if params else "")
+        affiliate = make_tp_redirect(base)
 
-# запуск
+        # Предлагаем 2 варианта: виджет (ваш script URL) и прямая редирект-ссылка
+        kb = telebot.types.InlineKeyboardMarkup()
+        kb.add(telebot.types.InlineKeyboardButton("Открыть в виджете (веб)", url=WIDGET_AVIA))
+        kb.add(telebot.types.InlineKeyboardButton("Открыть прямой поиск (aviasales)", url=affiliate))
+
+        bot.send_message(cid, "Готово — откройте удобный вариант:", reply_markup=kb)
+        user_states.pop(cid, None)
+        return
+
+    # hotels flow
+    if step == "hotels_city":
+        city = text
+        # делаем простой поисковый URL для отелей (и даём виджет + redirect)
+        search_url = f"https://www.aviasales.com/hotels?search={quote(city)}"
+        affiliate = make_tp_redirect(search_url)
+        kb = telebot.types.InlineKeyboardMarkup()
+        kb.add(telebot.types.InlineKeyboardButton("Открыть в виджете (отели)", url=WIDGET_AVIA))
+        kb.add(telebot.types.InlineKeyboardButton("Открыть прямой поиск (hotels)", url=affiliate))
+        bot.send_message(cid, f"Вот ссылки на поиск отелей в {city}:", reply_markup=kb)
+        user_states.pop(cid, None)
+        return
+
+    # по умолчанию:
+    bot.send_message(cid, "Не понял. Нажмите /menu или выберите кнопку.", reply_markup=main_menu_keyboard())
+
+# запуск polling
 if __name__ == "__main__":
     user_states.clear()
     while True:
